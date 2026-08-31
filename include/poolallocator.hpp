@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstddef>
 #include <cassert>
+#include <optional>
 
 #ifdef __cpp_lib_hardware_interference_size
     inline static constexpr size_t CacheLine = std::hardware_destructive_interference_size;

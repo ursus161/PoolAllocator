@@ -60,11 +60,53 @@ PoolAllocator<SlotSize, Count, LocalSize, Tag>::~PoolAllocator() {
 template <size_t SlotSize, size_t Count, size_t LocalSize, typename Tag>
 void PoolAllocator<SlotSize, Count, LocalSize, Tag>::flush_to_global() {
 
+    constexpr size_t keep = LocalSize / 2; // flush half of the local pool to global
+
+    auto tail = local_head;
+    for(auto i{1uz}; i < keep; ++i) {
+        tail = tail->next;
+    }
+
+    auto chain = tail->next;
+    tail->next = nullptr;
+
+    auto chain_tail = chain;
+    while(chain_tail->next != nullptr) {
+        chain_tail = chain_tail->next; 
+    }
+
+    Slot* old_head = global_head.load(std::memory_order_relaxed);
+    do {
+        chain_tail->next = old_head;
+    } while (!global_head.compare_exchange_weak(old_head, chain, std::memory_order_release, std::memory_order_relaxed));
+
+    local_count = keep;
 
 }
 
 template <size_t SlotSize, size_t Count, size_t LocalSize, typename Tag>
 bool PoolAllocator<SlotSize, Count, LocalSize, Tag>::refill_to_local()
 {
-    return true;
+   Slot* head = global_head.load(std::memory_order_acquire);
+
+    while (head != nullptr) {
+        auto* tail = head;
+        auto taken{1uz};
+
+        while (taken < LocalSize && tail->next != nullptr) {
+            tail = tail->next;
+            ++taken;
+        }
+        
+        Slot* rest = tail->next;
+
+        if (global_head.compare_exchange_weak(head, rest,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            tail->next = nullptr;
+            local_head = head;
+            local_count = taken;
+            return true;
+        }
+    }
+    return false;
 }
