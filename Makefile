@@ -1,5 +1,5 @@
 CXX      := g++
-CXXFLAGS := -std=c++23 -Wall -Wextra -Iinclude -pthread
+CXXFLAGS := -std=c++23 -Wall -Wextra -Iinclude -pthread -Wno-interference-size
 
 .PHONY: run test tsan bench clean
 

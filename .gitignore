@@ -1,0 +1,10 @@
+pool_run
+test_pool
+test_tsan
+bench_pool
+
+*.o
+*.out
+*.gch
+
+.vscode/

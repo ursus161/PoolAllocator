@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstddef>
+#include <cassert>
 
 #ifdef __cpp_lib_hardware_interference_size
     inline static constexpr size_t CacheLine = std::hardware_destructive_interference_size;
@@ -45,8 +46,8 @@ public:
     PoolAllocator(PoolAllocator&&) noexcept = delete; //dangling ptrs danger 
     PoolAllocator& operator=(PoolAllocator&&) noexcept = delete;
 
-    void* allocate();
-    void deallocate(void* ptr);
+    void* allocate() noexcept;
+    void deallocate(void* ptr) noexcept;
     
     void flush_to_global();
     bool refill_to_local(); // false if global pool is empty
@@ -66,3 +67,4 @@ thread_local typename PoolAllocator<S, C, L, Tag>::Slot*
 
 template <size_t S, size_t C, size_t L, typename Tag>
 thread_local size_t PoolAllocator<S, C, L, Tag>::local_count = 0;
+#include "../src/poolallocator.tpp"
