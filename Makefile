@@ -1,12 +1,16 @@
 CXX      := g++
 CXXFLAGS := -std=c++23 -Wall -Wextra -Iinclude -pthread -Wno-interference-size
 
-.PHONY: run test tsan bench clean
+.PHONY: all bench benchmark test tsan clean
 
-run:
+all: bench
+
+bench:
 	$(CXX) $(CXXFLAGS) -O3 -march=native -DNDEBUG \
-		src/main.cpp -o pool_run
-	./pool_run
+		bench/bench.cpp -o bench_pool
+
+benchmark: bench
+	./bench/benchmark.sh
 
 test:
 	$(CXX) $(CXXFLAGS) -O1 -g -fsanitize=address,undefined \
@@ -17,11 +21,6 @@ tsan:
 	$(CXX) $(CXXFLAGS) -O1 -g -fsanitize=thread \
 		tests/test_pool.cpp -o test_tsan
 	./test_tsan
-
-bench:
-	$(CXX) $(CXXFLAGS) -O3 -march=native -DNDEBUG \
-		bench/bench.cpp -o bench_pool
-	./bench_pool
 
 clean:
 	rm -f pool_run test_pool test_tsan bench_pool
