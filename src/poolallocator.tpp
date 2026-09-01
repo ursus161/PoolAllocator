@@ -21,8 +21,8 @@ PoolAllocator<SlotSize, Count, LocalSize, Tag>::PoolAllocator() {
         base[LocalSize - 1].next = nullptr; //last
 
         // capul tine metadata cat timp magazina sta in lista global 
-        base[0].mag.next_in_mag = &base[1]; //first
-        base[0].mag.next_mag = (m + 1 < MagCount)
+        base[0].mag.next_slot_in_magazine = &base[1]; //first
+        base[0].mag.next_magazine = (m + 1 < MagCount)
                              ? &pool[(m + 1) * LocalSize]
                              : nullptr;
     }
@@ -73,52 +73,48 @@ PoolAllocator<SlotSize, Count, LocalSize, Tag>::~PoolAllocator() {
 
 template <size_t SlotSize, size_t Count, size_t LocalSize, typename Tag>
 void PoolAllocator<SlotSize, Count, LocalSize, Tag>::flush_to_global() {
+    // the head of the local chain becomes the head of the new magazine
+    Slot* mag_head = local_head;
 
-    constexpr size_t keep = LocalSize / 2; // flush half of the local pool to global
-
-    auto tail = local_head;
-    for(auto i{1uz}; i < keep; ++i) {
+   //  find the last slot of the batch
+    Slot* tail = local_head;
+    for (auto i{1uz}; i < LocalSize; ++i) {
         tail = tail->next;
     }
 
-    auto chain = tail->next;
+    // what stays local
+    local_head = tail->next;
+    local_count -= LocalSize;
+
+    // close the magazine's internal chain
     tail->next = nullptr;
 
-    auto chain_tail = chain;
-    while(chain_tail->next != nullptr) {
-        chain_tail = chain_tail->next; 
-    }
+    // head carries the metadata: contents start at the second slot
+    Slot* first = mag_head->next;
+    mag_head->mag.next_slot_in_magazine = first;
 
+    // publish the magazine
     Slot* old_head = global_head.load(std::memory_order_relaxed);
     do {
-        chain_tail->next = old_head;
-    } while (!global_head.compare_exchange_weak(old_head, chain, std::memory_order_release, std::memory_order_relaxed));
-
-    local_count = keep;
-
+        mag_head->mag.next_magazine = old_head;
+    } while (!global_head.compare_exchange_weak(old_head, mag_head,
+                std::memory_order_release, std::memory_order_relaxed));
 }
 
+
 template <size_t SlotSize, size_t Count, size_t LocalSize, typename Tag>
-bool PoolAllocator<SlotSize, Count, LocalSize, Tag>::refill_to_local()
-{
-   Slot* head = global_head.load(std::memory_order_acquire);
+bool PoolAllocator<SlotSize, Count, LocalSize, Tag>::refill_to_local() {
+    Slot* head = global_head.load(std::memory_order_acquire);
 
     while (head != nullptr) {
-        auto* tail = head;
-        auto taken{1uz};
+        Slot* next_mag = head->mag.next_magazine;
+        Slot* first = head->mag.next_slot_in_magazine;
 
-        while (taken < LocalSize && tail->next != nullptr) {
-            tail = tail->next;
-            ++taken;
-        }
-        
-        Slot* rest = tail->next;
-
-        if (global_head.compare_exchange_weak(head, rest,
+        if (global_head.compare_exchange_weak(head, next_mag,
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
-            tail->next = nullptr;
+            head->next = first;        // capul devine nod obisnuit, metadata nu mai conteaza
             local_head = head;
-            local_count = taken;
+            local_count = LocalSize;
             return true;
         }
     }
