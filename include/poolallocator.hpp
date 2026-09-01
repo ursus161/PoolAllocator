@@ -32,8 +32,8 @@ class PoolAllocator {
         char data[SlotSize];
 
         struct{
-            Slot* next_magazine; // urmatoarea magazina de sloturi
-            Slot* next_slot_in_magazine; // primul slot din magazina
+            Slot* next_magazine; // next magazine in the global list
+            Slot* next_slot_in_magazine; // first usable slot inside this magazine
         } mag;
     };
 

@@ -14,13 +14,13 @@ PoolAllocator<SlotSize, Count, LocalSize, Tag>::PoolAllocator() {
       for (auto m{0uz}; m < MagCount; ++m) {
         Slot* base = &pool[m * LocalSize];
 
-        // sloturile alocabile din interiorul magazinei: s1 -> s2 -> ... -> s31 -> null
+        // the allocatable slots inside the magazine: s1 -> s2 -> ... -> s31 -> null
         for (auto i{1uz}; i < LocalSize - 1; ++i) {
             base[i].next = &base[i + 1];
         }
         base[LocalSize - 1].next = nullptr; //last
 
-        // capul tine metadata cat timp magazina sta in lista global 
+        // the head carries the metadata while the magazine sits in the global list 
         base[0].mag.next_slot_in_magazine = &base[1]; //first
         base[0].mag.next_magazine = (m + 1 < MagCount)
                              ? &pool[(m + 1) * LocalSize]
@@ -112,7 +112,7 @@ bool PoolAllocator<SlotSize, Count, LocalSize, Tag>::refill_to_local() {
 
         if (global_head.compare_exchange_weak(head, next_mag,
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
-            head->next = first;        // capul devine nod obisnuit, metadata nu mai conteaza
+            head->next = first;        // the head becomes a regular node, the metadata no longer matters
             local_head = head;
             local_count = LocalSize;
             return true;

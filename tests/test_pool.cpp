@@ -25,7 +25,7 @@ static void test_uniqueness() {
         void* p = pool.allocate();
         if (!p || !seen.insert(p).second) { ok = false; break; }
     }
-    check(ok && seen.size() == 1024, "fiecare slot returnat o singura data");
+    check(ok && seen.size() == 1024, "each slot is returned exactly once");
 }
 
 static void test_pattern() {
@@ -43,7 +43,7 @@ static void test_pattern() {
     for (size_t i = 0; i < ptrs.size(); ++i)
         if (*ptrs[i] != 0xA5A5'0000ull + i) { ok = false; break; }
 
-    check(ok, "sloturile nu se suprascriu intre ele");
+    check(ok, "slots do not overwrite each other");
 }
 
 static void test_exhaustion() {
@@ -52,7 +52,7 @@ static void test_exhaustion() {
     while (pool.allocate() != nullptr) {
         if (++got > 256) break;
     }
-    check(got == 256, "pool epuizat returneaza nullptr, fara crash");
+    check(got == 256, "exhausted pool returns nullptr, no crash");
 }
 
 static void test_reuse() {
@@ -70,7 +70,7 @@ static void test_reuse() {
     while (pool.allocate() != nullptr) {
         if (++again > 256) break;
     }
-    check(ptrs.size() == 256 && again == 256, "pool se reface complet dupa free");
+    check(ptrs.size() == 256 && again == 256, "pool fully recovers after free");
 }
 
 //multi-thread 
@@ -95,7 +95,7 @@ static void test_concurrent() {
             if (do_alloc) {
                 auto* p = static_cast<uint64_t*>(pool.allocate());
                 if (!p) { ++failed_allocs; continue; }
-                *p = 0xC0FFEE00ull + id;      // marcam cine detine slotul
+                *p = 0xC0FFEE00ull + id;      // mark which thread owns the slot
                 held.push_back(p);
             } else {
                 size_t k = rng() % held.size();
@@ -112,9 +112,9 @@ static void test_concurrent() {
     for (size_t t = 0; t < THREADS; ++t) ts.emplace_back(worker, t);
     for (auto& t : ts) t.join();
 
-    std::printf("       (%zu alocari esuate, %zu sloturi corupte)\n",
+    std::printf("       (%zu failed allocations, %zu corrupted slots)\n",
                 failed_allocs.load(), corrupted.load());
-    check(corrupted == 0, "niciun slot detinut de doua threaduri simultan");
+    check(corrupted == 0, "no slot is held by two threads at the same time");
 }
  
 
@@ -145,7 +145,7 @@ static void test_contention() {
     for (size_t t = 0; t < THREADS; ++t) ts.emplace_back(worker, t);
     for (auto& t : ts) t.join();
 
-    check(corrupted == 0, "refill/flush sub contention nu corup date");
+    check(corrupted == 0, "refill/flush under contention does not corrupt data");
 }
 
 int main() {
@@ -156,6 +156,6 @@ int main() {
     test_concurrent();
     test_contention();
 
-    std::printf("\n%s (%d esecuri)\n", failures ? "ESUAT" : "TOATE TRECUTE", failures);
+    std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "ALL PASSED", failures);
     return failures ? 1 : 0;
 }
