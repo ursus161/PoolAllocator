@@ -3,33 +3,33 @@
 
 template <size_t SlotSize, size_t Count, size_t LocalSize, typename Tag>
 PoolAllocator<SlotSize, Count, LocalSize, Tag>::PoolAllocator() {
-   
+
     constexpr size_t MagCount = Count / LocalSize; // number of magazines in the pool
+
+    mag_next = new std::atomic<uint32_t>[Count]; // throws bad_alloc on its own
     pool = static_cast<Slot*>(std::malloc(sizeof(Slot) * Count));
 
     if (!pool) [[unlikely]] {
-        throw std::bad_alloc{}; //sometimes things go wrong 
+        delete[] mag_next;
+        throw std::bad_alloc{}; //sometimes things go wrong
     }
-   
-      for (auto m{0uz}; m < MagCount; ++m) {
+
+    for (auto m{0uz}; m < MagCount; ++m) {
         Slot* base = &pool[m * LocalSize];
 
-        // the allocatable slots inside the magazine: s1 -> s2 -> ... -> s31 -> null
-        for (auto i{1uz}; i < LocalSize - 1; ++i) {
+        // every slot of the magazine is a plain list node: s0 -> s1 -> ... -> s31 -> null
+        for (auto i{0uz}; i < LocalSize - 1; ++i) {
             base[i].next = &base[i + 1];
         }
         base[LocalSize - 1].next = nullptr; //last
 
-        // the head carries the metadata while the magazine sits in the global list 
-        base[0].mag.next_slot_in_magazine = &base[1]; //first
-        base[0].mag.next_magazine = (m + 1 < MagCount)
-                             ? &pool[(m + 1) * LocalSize]
-                             : nullptr;
+        // the magazine link lives in the side array, keyed by the head slot index
+        mag_next[m * LocalSize].store(
+            (m + 1 < MagCount) ? static_cast<uint32_t>((m + 1) * LocalSize) : NIL,
+            std::memory_order_relaxed);
     }
 
-    
-
-    global_head.store(pool, std::memory_order_relaxed);
+    global_head.store(pack(0, 0), std::memory_order_relaxed);
 }
 
 template <size_t SlotSize, size_t Count, size_t LocalSize, typename Tag>
@@ -58,7 +58,7 @@ void PoolAllocator<SlotSize, Count, LocalSize, Tag>::deallocate(void* ptr) noexc
     slot->next = local_head;
     local_head = slot;
     ++local_count;
-    if(local_count >= LocalSize) [[unlikely]] {
+    if(local_count >= 2 * LocalSize) [[unlikely]] {
          flush_to_global();
     }
 
@@ -68,6 +68,7 @@ void PoolAllocator<SlotSize, Count, LocalSize, Tag>::deallocate(void* ptr) noexc
 template <size_t SlotSize, size_t Count, size_t LocalSize, typename Tag>
 PoolAllocator<SlotSize, Count, LocalSize, Tag>::~PoolAllocator() {
     std::free(pool);
+    delete[] mag_next;
 }
 
 
@@ -89,31 +90,34 @@ void PoolAllocator<SlotSize, Count, LocalSize, Tag>::flush_to_global() {
     // close the magazine's internal chain
     tail->next = nullptr;
 
-    // head carries the metadata: contents start at the second slot
-    Slot* first = mag_head->next;
-    mag_head->mag.next_slot_in_magazine = first;
+    const auto idx = static_cast<uint32_t>(mag_head - pool);
 
-    // publish the magazine
-    Slot* old_head = global_head.load(std::memory_order_relaxed);
+    // publish the magazine; the link goes to the side array, never into a slot
+    uint64_t old_head = global_head.load(std::memory_order_relaxed);
+    uint64_t new_head;
     do {
-        mag_head->mag.next_magazine = old_head;
-    } while (!global_head.compare_exchange_weak(old_head, mag_head,
+        mag_next[idx].store(static_cast<uint32_t>(old_head), std::memory_order_relaxed);
+        new_head = pack(static_cast<uint32_t>(old_head >> 32) + 1, idx);
+    } while (!global_head.compare_exchange_weak(old_head, new_head,
                 std::memory_order_release, std::memory_order_relaxed));
 }
 
 
 template <size_t SlotSize, size_t Count, size_t LocalSize, typename Tag>
 bool PoolAllocator<SlotSize, Count, LocalSize, Tag>::refill_to_local() {
-    Slot* head = global_head.load(std::memory_order_acquire);
+    uint64_t head = global_head.load(std::memory_order_acquire);
 
-    while (head != nullptr) {
-        Slot* next_mag = head->mag.next_magazine;
-        Slot* first = head->mag.next_slot_in_magazine;
+    while (static_cast<uint32_t>(head) != NIL) {
+        const auto idx = static_cast<uint32_t>(head);
 
-        if (global_head.compare_exchange_weak(head, next_mag,
-                std::memory_order_acq_rel, std::memory_order_acquire)) {
-            head->next = first;        // the head becomes a regular node, the metadata no longer matters
-            local_head = head;
+        // speculative: may be stale if we lose the CAS, but it only ever reads the
+        // side array, so it can never follow user data written into a taken slot
+        const uint64_t new_head = pack(static_cast<uint32_t>(head >> 32) + 1,
+                                       mag_next[idx].load(std::memory_order_relaxed));
+
+        if (global_head.compare_exchange_weak(head, new_head,
+                std::memory_order_acquire, std::memory_order_acquire)) {
+            local_head = &pool[idx];   // the whole magazine is ours now
             local_count = LocalSize;
             return true;
         }

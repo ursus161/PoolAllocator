@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstddef>
+#include <cstdint>
 #include <cassert>
 #include <optional>
 
@@ -26,23 +27,26 @@ class PoolAllocator {
     static_assert(SlotSize >= 2 * sizeof(void*), "SlotSize must be greater than or equal to sizeof(void*)");
     static_assert((SlotSize & (SlotSize - 1)) == 0, "SlotSize must be a power of 2");
     static_assert(Count % LocalSize == 0, "Count must be a multiple of LocalSize");
-    
+    static_assert(Count < 0xFFFFFFFFu, "Count must fit in a 32 bit slot index");
+
     union Slot {
         Slot* next;
         char data[SlotSize];
-
-        struct{
-            Slot* next_magazine; // next magazine in the global list
-            Slot* next_slot_in_magazine; // first usable slot inside this magazine
-        } mag;
     };
+
+    static constexpr uint32_t NIL = 0xFFFFFFFFu; // "no magazine": empty global list
+
+    static constexpr uint64_t pack(uint32_t tag, uint32_t idx) noexcept {
+        return (static_cast<uint64_t>(tag) << 32) | idx;
+    }
 
     static thread_local Slot* local_head;
     static thread_local size_t local_count;
 
 
-    alignas(CacheLine) std::atomic<Slot*> global_head;
+    alignas(CacheLine) std::atomic<uint64_t> global_head; // tag << 32 | head slot index
     alignas(CacheLine) Slot* pool;
+    std::atomic<uint32_t>* mag_next; // slot index -> next magazine head, never inside a slot
 
 public:
     PoolAllocator();
