@@ -3,17 +3,31 @@
 
 template <size_t SlotSize, size_t Count, size_t LocalSize, typename Tag>
 PoolAllocator<SlotSize, Count, LocalSize, Tag>::PoolAllocator() {
-  
+   
+    constexpr size_t MagCount = Count / LocalSize; // number of magazines in the pool
     pool = static_cast<Slot*>(std::malloc(sizeof(Slot) * Count));
 
     if (!pool) [[unlikely]] {
         throw std::bad_alloc{}; //sometimes things go wrong 
     }
    
-    for (auto i{0uz}; i < Count - 1; ++i) {
-        pool[i].next = &pool[i + 1];
+      for (auto m{0uz}; m < MagCount; ++m) {
+        Slot* base = &pool[m * LocalSize];
+
+        // sloturile alocabile din interiorul magazinei: s1 -> s2 -> ... -> s31 -> null
+        for (auto i{1uz}; i < LocalSize - 1; ++i) {
+            base[i].next = &base[i + 1];
+        }
+        base[LocalSize - 1].next = nullptr; //last
+
+        // capul tine metadata cat timp magazina sta in lista global 
+        base[0].mag.next_in_mag = &base[1]; //first
+        base[0].mag.next_mag = (m + 1 < MagCount)
+                             ? &pool[(m + 1) * LocalSize]
+                             : nullptr;
     }
-    pool[Count - 1].next = nullptr;
+
+    
 
     global_head.store(pool, std::memory_order_relaxed);
 }

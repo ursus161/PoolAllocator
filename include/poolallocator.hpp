@@ -23,12 +23,18 @@ class PoolAllocator {
     static_assert(LocalSize > 0, "LocalSize must be greater than 0");
     static_assert(LocalSize <= Count, "LocalSize must be less than or equal to Count");
     static_assert((LocalSize & (LocalSize - 1)) == 0, "LocalSize must be a power of 2");
-    static_assert(SlotSize >= sizeof(void*), "SlotSize must be greater than or equal to sizeof(void*)");
+    static_assert(SlotSize >= 2 * sizeof(void*), "SlotSize must be greater than or equal to sizeof(void*)");
     static_assert((SlotSize & (SlotSize - 1)) == 0, "SlotSize must be a power of 2");
+    static_assert(Count % LocalSize == 0, "Count must be a multiple of LocalSize");
     
     union Slot {
         Slot* next;
         char data[SlotSize];
+
+        struct{
+            Slot* next_magazine; // urmatoarea magazina de sloturi
+            Slot* next_slot_in_magazine; // primul slot din magazina
+        } mag;
     };
 
     static thread_local Slot* local_head;
