@@ -108,9 +108,8 @@ static void test_concurrent() {
         for (auto* p : held) pool.deallocate(p);
     };
 
-    std::vector<std::thread> ts;
+    std::vector<std::jthread> ts;
     for (size_t t = 0; t < THREADS; ++t) ts.emplace_back(worker, t);
-    for (auto& t : ts) t.join();
 
     std::printf("       (%zu failed allocations, %zu corrupted slots)\n",
                 failed_allocs.load(), corrupted.load());
