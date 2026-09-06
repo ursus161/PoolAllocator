@@ -10,7 +10,7 @@
 static int failures = 0;
 
 static void check(bool ok, const char* what) {
-    std::printf("[%s] %s\n", ok ? " OK " : "FAIL", what);
+    std::printf("[%s] %s\n", ok ? " ok " : "fail", what);
     if (!ok) ++failures;
 }
 
@@ -155,6 +155,6 @@ int main() {
     test_concurrent();
     test_contention();
 
-    std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "ALL PASSED", failures);
+    std::printf("\n%s (%d failures)\n", failures ? "failed, you're shit" : "all passed, you're THE shit", failures);
     return failures ? 1 : 0;
 }

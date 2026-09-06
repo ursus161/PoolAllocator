@@ -19,6 +19,7 @@
 template <size_t SlotSize, size_t Count, size_t LocalSize = 32, typename Tag = void>
 class PoolAllocator {
 
+    //COMPILE TIME
     static_assert(SlotSize > 0, "SlotSize must be greater than 0");
     static_assert(Count > 0, "Count must be greater than 0");
     static_assert(LocalSize > 0, "LocalSize must be greater than 0");
@@ -43,10 +44,11 @@ class PoolAllocator {
     static thread_local Slot* local_head;
     static thread_local size_t local_count;
 
-
+    //global head is the only thing that is touched my multiple threads  
     alignas(CacheLine) std::atomic<uint64_t> global_head; // tag << 32 | head slot index
-    alignas(CacheLine) Slot* pool;
+    Slot* pool;
     std::atomic<uint32_t>* mag_next; // slot index -> next magazine head, never inside a slot
+    std::atomic<uint32_t>* mag_size;
 
 public:
     PoolAllocator();
@@ -60,13 +62,25 @@ public:
     void* allocate() noexcept;
     void deallocate(void* ptr) noexcept;
     
-    void flush_to_global();
-    bool refill_to_local(); // false if global pool is empty
+    void flush_n_to_global(size_t n) noexcept; // flush n slots from local to global, n <= local_count
+    bool refill_to_local() noexcept; // false if global pool is empty
 
     static size_t get_local_count()   {
         return local_count;
     }
+
+    static constexpr uint32_t index_of(uint64_t packed) {
+
+    return static_cast<uint32_t>(packed);   // low 32 bits are the index
     
+    }
+    
+
+    static constexpr uint32_t tag_of(uint64_t packed) {
+
+    return static_cast<uint32_t>(packed >> 32);
+    
+    }
 };
 
 
