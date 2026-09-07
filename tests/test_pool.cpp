@@ -147,6 +147,30 @@ static void test_contention() {
     check(corrupted == 0, "refill/flush under contention does not corrupt data");
 }
 
+
+static void test_thread_death_leak() {
+    PoolAllocator<64, 1024> pool;
+
+     
+    {
+        std::thread t([&]{
+            void* p = pool.allocate();
+            (void)p;
+            // thread dies w slots in local head
+        });
+        t.join();
+    }
+ 
+    //no thread-death cleanup, slots taken by the dead thread
+    //  they never appear in global_head again
+    size_t total = 0;
+    while (pool.allocate() != nullptr) {
+        if (++total > 1024) break;    
+    }
+
+    check(total == 1024, "slots held by dead threads are leaked, but do not crash the allocator");
+}
+
 int main() {
     test_uniqueness();
     test_pattern();
@@ -154,7 +178,7 @@ int main() {
     test_reuse();
     test_concurrent();
     test_contention();
-
+    test_thread_death_leak();
     std::printf("\n%s (%d failures)\n", failures ? "failed, you're shit" : "all passed, you're THE shit", failures);
     return failures ? 1 : 0;
 }
