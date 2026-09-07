@@ -13,16 +13,10 @@ static constexpr size_t BATCH  = 64;
 static constexpr size_t ROUNDS = 20'000;
 static constexpr size_t WARMUP = 2'000;
 
-static constexpr size_t WORKING_SET  = 1024;
-static constexpr size_t WS_BATCH     = 64;
-static constexpr size_t WS_ROUNDS    = 100'000;
-static constexpr size_t WS_WARMUP    = 10'000;
-
 static inline uint64_t tsc_begin() {
+    unsigned aux;
     _mm_lfence();
-    uint64_t t = __rdtsc();
-    _mm_lfence();
-    return t;
+    return __rdtscp(&aux);
 }
 
 static inline uint64_t tsc_end() {
@@ -51,20 +45,15 @@ static void report(const char* name, std::vector<uint64_t>& v, double ghz) {
     for (uint64_t x : v) sum += double(x);
     double mean = sum / double(v.size());
 
-    std::printf("%-12s  mean %6.2f cyc (%5.2f ns)   p50 %4llu   p99 %5llu   p99.9 %6llu   max %6llu\n",
+    std::printf("%-12s  mean %6.2f cyc (%5.2f ns)   p50 %4llu   p99 %5llu   p99.9 %6llu\n",
                 name, mean, mean / ghz,
                 (unsigned long long)v[v.size() * 50 / 100],
                 (unsigned long long)v[v.size() * 99 / 100],
-                (unsigned long long)v[v.size() * 999 / 1000],
-                (unsigned long long)v.back());
+                (unsigned long long)v[v.size() * 999 / 1000]);
 }
 
-// Benchmark 1: amortized single-slot reuse, batched timing (BATCH=64).
-// Measures allocate() alone, cost of one call divided out of a batch of 64 --
-// instrumentation overhead becomes negligible, but this reuses the same slot
-// every time (LIFO free-list), so it stays hot in L1 and rarely refills.
 template <typename Alloc, typename Free>
-static void bench_amortized(const char* name, Alloc alloc, Free dealloc, double ghz) {
+static void bench(const char* name, Alloc alloc, Free dealloc, double ghz) {
     std::vector<void*> ptrs(BATCH);
     std::vector<uint64_t> samples;
     samples.reserve(ROUNDS);
@@ -87,85 +76,17 @@ static void bench_amortized(const char* name, Alloc alloc, Free dealloc, double 
     report(name, samples, ghz);
 }
 
-// Benchmark 2: realistic working-set churn, per-call timing.
-// Working set of 1024 slots (larger than glibc's tcache), dealloc'd and
-// realloc'd in disjoint 64-wide batches so the same slot is never freed and
-// immediately reused. Each alloc/dealloc is timed individually -- full
-// rdtscp/lfence overhead lands on every sample, but refill/flush is forced
-// every round instead of amortized away.
-template <typename Alloc, typename Free>
-static void bench_working_set(const char* name, Alloc alloc, Free dealloc, double ghz) {
-    std::vector<void*> ptrs(WORKING_SET);
-    for (size_t i = 0; i < WORKING_SET; ++i) {
-        ptrs[i] = alloc();
-    }
-
-    std::vector<uint64_t> samples;
-    samples.reserve(WS_ROUNDS);
-    size_t head = 0;
-
-    for (size_t r = 0; r < WS_WARMUP; r += WS_BATCH) {
-        for (size_t i = 0; i < WS_BATCH; ++i) {
-            size_t idx = (head + i) % WORKING_SET;
-            dealloc(ptrs[idx]);
-        }
-        for (size_t i = 0; i < WS_BATCH; ++i) {
-            size_t idx = (head + i) % WORKING_SET;
-            ptrs[idx] = alloc();
-            consume(ptrs[idx]);
-        }
-        head = (head + WS_BATCH) % WORKING_SET;
-    }
-
-    for (size_t r = 0; r < WS_ROUNDS; r += WS_BATCH) {
-        uint64_t t0, t1;
-        uint64_t dealloc_times[WS_BATCH];
-        uint64_t alloc_times[WS_BATCH];
-
-        for (size_t i = 0; i < WS_BATCH; ++i) {
-            size_t idx = (head + i) % WORKING_SET;
-            t0 = tsc_begin();
-            dealloc(ptrs[idx]);
-            t1 = tsc_end();
-            dealloc_times[i] = t1 - t0;
-        }
-        for (size_t i = 0; i < WS_BATCH; ++i) {
-            size_t idx = (head + i) % WORKING_SET;
-            t0 = tsc_begin();
-            ptrs[idx] = alloc();
-            t1 = tsc_end();
-            alloc_times[i] = t1 - t0;
-            consume(ptrs[idx]);
-        }
-        for (size_t i = 0; i < WS_BATCH; ++i) {
-            samples.push_back(dealloc_times[i] + alloc_times[i]);
-        }
-        head = (head + WS_BATCH) % WORKING_SET;
-    }
-
-    for (size_t i = 0; i < WORKING_SET; ++i) {
-        dealloc(ptrs[i]);
-    }
-    report(name, samples, ghz);
-}
-
 int main() {
     double ghz = tsc_ghz();
-    std::printf("TSC %.3f GHz\n\n", ghz);
+    std::printf("TSC %.3f GHz   batch %zu   rounds %zu\n\n", ghz, BATCH, ROUNDS);
 
     PoolAllocator<SLOT, COUNT> pool;
 
-    std::printf("-- amortized (batch=%zu, same-slot reuse) --\n", BATCH);
-    bench_amortized("pool", [&] { return pool.allocate(); },
-                             [&](void* p) { pool.deallocate(p); }, ghz);
-    bench_amortized("malloc", [] { return std::malloc(SLOT); },
-                               [](void* p) { std::free(p); }, ghz);
+    bench("pool", [&] { return pool.allocate(); },
+                  [&](void* p) { pool.deallocate(p); }, ghz);
 
-    std::printf("\n-- working set (%zu slots, per-call timing) --\n", WORKING_SET);
-    bench_working_set("pool", [&] { return pool.allocate(); },
-                                [&](void* p) { pool.deallocate(p); }, ghz);
-    bench_working_set("malloc", [] { return std::malloc(SLOT); },
-                                  [](void* p) { std::free(p); }, ghz);
+    bench("malloc", [] { return std::malloc(SLOT); },
+                    [](void* p) { std::free(p); }, ghz);
 
     return 0;
 }
